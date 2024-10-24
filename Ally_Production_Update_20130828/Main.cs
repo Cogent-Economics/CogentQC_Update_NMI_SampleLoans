@@ -110,7 +110,10 @@ namespace CogentQC_Update_ImportSpecs
                 ProcessSampledLoans(postProgress, true);
 
                 //remove unused lookup values
-
+                int countUW = DeleteUnusedLookupValues(postProgress, true);
+                postProgress("Unused Underwriter Names deleted: " + countUW);
+                int countUG = DeleteUnusedLookupValues(postProgress, false);
+                postProgress("Unused Underwriting Groups deleted: " + countUG);
 
                 return retVal;
             }
@@ -129,9 +132,16 @@ namespace CogentQC_Update_ImportSpecs
                 NameValueCollection nvcUWName = new NameValueCollection();
                 NameValueCollection nvcUWGroup = new NameValueCollection();
 
+                int updateCount = 0;
+                int failedCount = 0;
+
                 DataTable sampledLoansToUpdate = GetSampledLoansToProcess(postProgress, false);
                 if (sampledLoansToUpdate.Rows.Count > 0)
                 {
+                    postProgress("START: Process Sampled" + ((isDAR) ? "DAR " : string.Empty) + "Loans With Values");
+                    postProgress("");
+                    postProgress("Number of Sampled " + ((isDAR) ? "DAR ": string.Empty) +"Loans to Process: " + sampledLoansToUpdate.Rows.Count.ToString());
+                    postProgress("");
                     foreach (DataRow dr in sampledLoansToUpdate.Rows)
                     {
                         if (dr["LoanNumber"] != null && dr["LoanNumber"].ToString().Trim() != string.Empty)
@@ -142,11 +152,17 @@ namespace CogentQC_Update_ImportSpecs
                                 NameValueCollection results = GetUWGuids(postProgress, populationRecord.Rows[0], nvcUWName, nvcUWGroup);
 
                                 UpdateSampledLoanRecord(postProgress, results, dr);
+                                updateCount++;
                             }
                             else
-                            { postProgress("POPULATION RECORD NOT FOUND: " + dr["LoanNumber"].ToString().Trim()); }
+                            { postProgress(((isDAR) ? "DAR " : string.Empty) + "POPULATION RECORD NOT FOUND: " + dr["LoanNumber"].ToString().Trim()); failedCount++; }
                         }
                     }
+                    postProgress("FINISH: Process Sampled" + ((isDAR) ? "DAR " : string.Empty) + "Loans With Values");
+                    postProgress("");
+                    postProgress("Update Count: " + updateCount);
+                    postProgress("Failed Count: " + failedCount);
+                    postProgress("");
                 }
                 else
                 {
@@ -228,12 +244,41 @@ namespace CogentQC_Update_ImportSpecs
         }
 
 
+        private int DeleteUnusedLookupValues(Update.PostProgress postProgress, bool isUW)
+        {
+            try
+            {
+                LookupTable targetLT = (isUW) ? ltUnderwriterNameCode : ltUnderwritingGrpCode;
+                string targetField = (isUW) ? "underwriterName" : "underwritingGroup";
+
+                string SQL = string.Format("DELETE LookupValue " +
+                    "FROM LookupValue " +
+                    "INNER JOIN LookupTable ON LookupValue.LookupTableID = LookupTable.LookupTableID " +
+                    "WHERE LookupTable.LookupTableID = {0} " +
+                    "AND (LookupValue.LookupValueID NOT IN(" +
+                        "SELECT {1} " +
+                        "FROM Loan " +
+                        "WHERE {1} <> '00000000-0000-0000-0000-000000000000')" +
+                     "AND LookupValue.LookupValueID NOT IN(" +
+                        "SELECT {1} " +
+                        "FROM LoanDAR " +
+                        "WHERE {1} <> '00000000-0000-0000-0000-000000000000'))", DbConvert.ToSqlLiteral(targetLT.LookupTableID), targetField);
+               int count = Db.ExecuteSQL(SQL);
+                
+                return count;
+            }catch(Exception ex)
+            {
+                postProgress("ERROR: " + ex.Message + Environment.NewLine + ex.StackTrace);
+                return -1;
+            }
+        }
+
         private DataTable GetSampledLoansToProcess(Update.PostProgress postProgress, bool isDAR)
         {
             string tableName = (isDAR) ? "LoanDAR" : "Loan";
             DataTable retval = new DataTable();
             //Get Sampled Loans with Underwriter Name or Underwriting Group values
-            string SQLDAR = "SELECT LoanID, SampleTypeID, LoanNumber, underwriterName, underwritingGroup FROM " + tableName + " WHERE (underwriterName <> '00000000-0000-0000-0000-000000000000' OR underwritingGroup <> '00000000-0000-0000-0000-000000000000')";
+            string SQLDAR = string.Format("SELECT LoanID, SampleTypeID, LoanNumber, underwriterName, underwritingGroup FROM {0} WHERE (underwriterName <> '00000000-0000-0000-0000-000000000000' OR underwritingGroup <> '00000000-0000-0000-0000-000000000000')", tableName);
             Db.ExecuteSQLFillDataTable(retval, SQLDAR);
 
             return retval;
@@ -244,7 +289,7 @@ namespace CogentQC_Update_ImportSpecs
             string tableName = (isDAR) ? "DARLoanImport" : "LoanImport";
             DataTable retval = new DataTable();
             //Get Sampled Loans with Underwriter Name or Underwriting Group values
-            string SQL = string.Format("SELECT LoanNumber, underwriterName, underwritingGroup FROM LoanImport WHERE LTRIM(RTRIM(LoanNumber)) = {0}", DbConvert.ToSqlLiteral(loanNumber));
+            string SQL = string.Format("SELECT LoanNumber, underwriterName, underwritingGroup FROM {0} WHERE LTRIM(RTRIM(LoanNumber)) = {1}", tableName, DbConvert.ToSqlLiteral(loanNumber));
             Db.ExecuteSQLFillDataTable(retval, SQL);
 
             return retval;
@@ -265,7 +310,7 @@ namespace CogentQC_Update_ImportSpecs
                 newLV.Name = (isUWName) ? "Underwriter Name" : "Underwriting Group";
                 newLV.IsActive = true;
                 newLV.SaveToDb();
-                return lv.LookupValueID;
+                return newLV.LookupValueID;
             }
         }
 
